@@ -20,7 +20,8 @@ parser = argparse.ArgumentParser(description='Image Caption Generator Training')
 parser.add_argument('--text-path', type=str, default='Flickr8k_text', help='Path to the Flickr8k text dataset directory')
 parser.add_argument('--images-path', type=str, default='Flickr8k_Dataset/Flicker8k_Dataset', help='Path to the Flickr8k image dataset directory')
 parser.add_argument('--epochs', type=int, default=10, help='Number of epochs to train for')
-parser.add_argument('--batch-size', type=int, default=32, help='Batch size for training')
+parser.add_argument('--batch-size', type=int, default=16, help='Batch size for training (reduced for better gradients)')
+parser.add_argument('--learning-rate', type=float, default=0.0001, help='Initial learning rate')
 args = parser.parse_args()
 
 # --- NEW: Make paths absolute from script location ---
@@ -58,7 +59,7 @@ def download_with_retry(url, filename, max_retries=3):
             print(f"Download attempt {attempt + 1} failed. Retrying in 5 seconds...")
             time.sleep(5)
 
-# Replace the Xception model initialization with:
+
 weights_url = "https://storage.googleapis.com/tensorflow/keras-applications/xception/xception_weights_tf_dim_ordering_tf_kernels_notop.h5"
 weights_path = download_with_retry(weights_url, 'xception_weights.h5')
 model = Xception(include_top=False, pooling='avg', weights=weights_path)
@@ -107,7 +108,6 @@ def load_features(photos):
 
 filename = os.path.join(args.text_path, "Flickr_8k.trainImages.txt")
 
-#train = loading_data(filename)
 train_imgs = load_photos(filename)
 train_descriptions = load_clean_descriptions("descriptions.txt", train_imgs)
 train_features = load_features(train_imgs)
@@ -117,10 +117,6 @@ dev_filename = os.path.join(args.text_path, "Flickr_8k.devImages.txt")
 val_imgs = load_photos(dev_filename)
 val_descriptions = load_clean_descriptions("descriptions.txt", val_imgs)
 val_features = load_features(val_imgs)
-
-# `load_clean_descriptions` already wraps captions with '<start>' and '<end>'.
-# No additional token wrapping required here.
-
 
 tokenizer = create_tokenizer(train_descriptions)
 dump(tokenizer, open('tokenizer.p', 'wb'))
@@ -219,8 +215,6 @@ def create_sequences(tokenizer, max_length, desc_list, feature):
 
 # train our model
 print('Dataset: ', len(train_imgs))
-print('Descriptions: train=', len(train_descriptions))
-print('Photos: train=', len(train_features))
 print('Vocabulary Size:', vocab_size)
 print('Description Length: ', max_length)
 print('Epochs:', args.epochs)
@@ -241,30 +235,31 @@ steps = get_steps_per_epoch(train_descriptions)
 
 model = define_model(vocab_size, max_length, embedding_matrix=embedding_matrix, embedding_dim=embedding_dim)
 
-# Use Adam optimizer with controlled learning rate and decay
+# Use Adam optimizer with controlled learning rate and gradient clipping
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 
-optimizer = Adam(learning_rate=0.001)
+# IMPROVED: Lower learning rate + gradient clipping to prevent exploding gradients
+optimizer = Adam(learning_rate=args.learning_rate, clipnorm=1.0)
 model.compile(loss='categorical_crossentropy', optimizer=optimizer)
 print(model.summary())
 
 # making a directory models to save our models
 os.makedirs("models", exist_ok=True)
 
-# Callbacks for better training
+# IMPROVED Callbacks for better training
 early_stopping = EarlyStopping(
     monitor='val_loss',
-    patience=10,
+    patience=5,  # Reduced from 10 - stop earlier if not improving
     restore_best_weights=True,
     verbose=1
 )
 
 reduce_lr = ReduceLROnPlateau(
     monitor='val_loss',
-    factor=0.5,
-    patience=5,
-    min_lr=1e-6,
+    factor=0.3,  # More aggressive reduction (was 0.5)
+    patience=3,  # Reduce faster (was 5)
+    min_lr=1e-7,
     verbose=1
 )
 

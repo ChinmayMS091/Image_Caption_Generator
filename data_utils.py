@@ -7,7 +7,6 @@ import numpy as np
 import tensorflow as tf
 tf.get_logger().setLevel('ERROR')
 
-from PIL import Image
 from tensorflow.keras.applications.xception import preprocess_input
 from tensorflow.keras.preprocessing.image import img_to_array, load_img
 from tensorflow.keras.preprocessing.text import Tokenizer
@@ -57,16 +56,6 @@ def cleaning_text(captions):
             img_caption = ' '.join(cleaned_desc)
             captions[img][i] = img_caption
     return captions
-
-
-
-def text_vocabulary(descriptions):
-    # build vocabulary of all unique words
-    vocab = set()
-    for key in descriptions.keys():
-        [vocab.update(d.split()) for d in descriptions[key]]
-    return vocab
-
 
 # All descriptions in one file
 def save_descriptions(descriptions, filename):

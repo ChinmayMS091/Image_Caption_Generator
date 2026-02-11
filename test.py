@@ -34,10 +34,12 @@ def word_for_id(integer, tokenizer):
     return None
 
 
-def generate_desc(model, tokenizer, photo, max_length, beam_width=3):
+def generate_desc(model, tokenizer, photo, max_length, beam_width=5, diversity_penalty=0.5):
     """
-    Generate caption using beam search (more accurate than greedy).
-    beam_width=1 is equivalent to greedy; higher values explore more candidates.
+    Generate caption using diverse beam search with repetition penalty.
+    
+    beam_width: Number of beams (5-7 recommended)
+    diversity_penalty: Penalty for using same words (0.3-0.7 recommended)
     """
     start_candidates = ['<start>', 'start', 'startseq', '<startseq>', 'sos']
     end_candidates = ['<end>', 'end', 'endseq', '<endseq>', 'eos']
@@ -62,20 +64,25 @@ def generate_desc(model, tokenizer, photo, max_length, beam_width=3):
             "Regenerate `tokenizer.p` using the project's preprocessing so it contains a start/end token."
         )
 
-    # Beam search with bounded candidate list
-    sequences = [([start_token_idx], 0.0)]  # (token_seq, total_score)
+    # Beam search with diversity penalty to avoid repetition
+    sequences = [([start_token_idx], 0.0, set())]  # (seq, score, used_words)
 
     for step in range(max_length):
         all_candidates = []
-        for seq, score in sequences:
+        for seq, score, used_words in sequences:
             # If sequence ends with end token, mark as complete
             if seq[-1] == end_token_idx:
-                all_candidates.append((seq, score))
+                all_candidates.append((seq, score, used_words))
                 continue
 
             # Pad and predict next token
             padded_seq = pad_sequences([seq], maxlen=max_length, padding='post')
             preds = model.predict([photo, padded_seq], verbose=0)[0]
+            
+            # Apply diversity penalty: reduce probability of already used words
+            for word_idx in used_words:
+                if word_idx < len(preds):
+                    preds[word_idx] *= (1.0 - diversity_penalty)
 
             # Get top beam_width predictions (log probabilities for numerical stability)
             top_indices = np.argsort(preds)[-beam_width:][::-1]  # descending order
@@ -88,19 +95,30 @@ def generate_desc(model, tokenizer, photo, max_length, beam_width=3):
                     log_prob = -1000.0  # very low score for zero probability
                 new_seq = seq + [idx]
                 new_score = score + log_prob
-                all_candidates.append((new_seq, new_score))
+                new_used = used_words.copy()
+                new_used.add(idx)
+                all_candidates.append((new_seq, new_score, new_used))
 
         # Keep only top beam_width candidates (sorted by score, descending)
         sequences = sorted(all_candidates, key=lambda x: x[1], reverse=True)[:beam_width]
 
         # If all candidates ended, break early
-        if all(seq[-1] == end_token_idx for seq, _ in sequences):
+        if all(seq[-1] == end_token_idx for seq, _, _ in sequences):
             break
 
     # Pick the best sequence
     best_seq = sequences[0][0]
     words = [word_for_id(i, tokenizer) for i in best_seq]
-    return ' '.join(w for w in words if w is not None)
+    caption = ' '.join(w for w in words if w is not None)
+    
+    # Post-process: remove duplicate consecutive words
+    words_list = caption.split()
+    cleaned = []
+    for i, word in enumerate(words_list):
+        if i == 0 or word != words_list[i-1]:
+            cleaned.append(word)
+    
+    return ' '.join(cleaned)
 
 # --- NEW: Make paths absolute from script location ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
